@@ -1,5 +1,5 @@
 {
-    "name": "tekwing/laravel-payment-gateway",
+    "name": "tekwing/multipay",
     "description": "A reusable Stripe and Razorpay gateway manager for Laravel.",
     "type": "library",
     "require": {
