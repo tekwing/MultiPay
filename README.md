@@ -1,59 +1,279 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+MultiPay for Laravel
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+A flexible and reusable payment gateway manager for Laravel with support for Stripe and Razorpay.
 
-## About Laravel
+MultiPay uses a polymorphic architecture, allowing any model in your application—such as Orders, Invoices, Carts, or Subscriptions—to seamlessly process payments through dynamically managed, database-driven gateway credentials.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+Requirements
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+PHP 8.1 or higher
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+Laravel 10.0, 11.0, or 12.0
 
-## Learning Laravel
+Installation
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+Install the package via Composer:
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+composer require tekwing/multipay
 
-## Laravel Sponsors
+Publish Configuration
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+Publish the MultiPay configuration file:
 
-### Premium Partners
+php artisan vendor:publish --tag=payment-config
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+Publish Database Migrations
 
-## Contributing
+Publish the payment-related migrations:
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+php artisan vendor:publish --tag=payment-migrations
 
-## Code of Conduct
+Run Migrations
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+Run the migrations to create the payment_gateways and payments tables:
 
-## Security Vulnerabilities
+php artisan migrate
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+Configuration
 
-## License
+The configuration file is located at:
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+config/payment.php
+
+
+You can configure the default payment gateway using the PAYMENT_GATEWAY environment variable.
+
+PAYMENT_GATEWAY=stripe
+
+
+If no gateway is explicitly provided when initiating a payment, MultiPay will use the configured default gateway.
+
+Setup & Usage
+1. Configure a Payment Gateway
+
+MultiPay loads payment gateway credentials dynamically from the database. This allows you to manage active gateways through your application's admin panel without hard-coding gateway configuration.
+
+For example, you can create a Stripe gateway using the PaymentGateway model:
+
+use Tekwing\MultiPay\Models\PaymentGateway;
+
+PaymentGateway::create([
+    'name' => 'Stripe',
+    'code' => 'stripe',
+    'credentials' => [
+        'secret_key' => env('STRIPE_SECRET'),
+        'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
+    ],
+    'is_active' => true,
+    'status' => true,
+]);
+
+
+The gateway credentials are stored in the payment_gateways table and can be managed dynamically by your application.
+
+2. Prepare Your Payable Models
+
+Any model that needs to support payments must implement the Tekwing\MultiPay\Contracts\Payable interface.
+
+For example, an Order model:
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\MorphMany;
+use Tekwing\MultiPay\Contracts\Payable;
+use Tekwing\MultiPay\Models\Payment;
+
+class Order extends Model implements Payable
+{
+    /**
+     * Define the polymorphic relationship
+     * to the package's payments table.
+     */
+    public function payments(): MorphMany
+    {
+        return $this->morphMany(Payment::class, 'payable');
+    }
+
+    /**
+     * Return the total amount to be charged.
+     */
+    public function getPayableAmount(): float
+    {
+        return (float) $this->total_amount;
+    }
+
+    /**
+     * Return a description for the payment gateway.
+     */
+    public function getPayableDescription(): string
+    {
+        return "Payment for Order #{$this->id}";
+    }
+}
+
+
+The same approach can be used for other models such as:
+
+Order
+
+Invoice
+
+Cart
+
+Subscription
+
+Any other Eloquent model that requires payment processing
+
+3. Initiate a Payment
+
+Inject PaymentService into your controller, service, or route and initiate the payment.
+
+MultiPay will:
+
+Resolve the requested payment gateway.
+
+Retrieve the gateway credentials from the database.
+
+Calculate the payable amount using your model.
+
+Create a pending payment record.
+
+Initiate the transaction through the selected gateway.
+
+Example:
+
+namespace App\Http\Controllers;
+
+use App\Models\Order;
+use Illuminate\Http\Request;
+use Tekwing\MultiPay\Services\PaymentService;
+
+class CheckoutController extends Controller
+{
+    public function pay(
+        Request $request,
+        PaymentService $paymentService
+    ) {
+        $order = Order::findOrFail($request->order_id);
+
+        // Initiate payment using Stripe.
+        //
+        // If the second argument is omitted,
+        // config('payment.default') will be used.
+        $response = $paymentService->initiate($order, 'stripe');
+
+        return response()->json([
+            'success' => true,
+            'gateway_response' => $response,
+        ]);
+    }
+}
+
+Using the Default Gateway
+
+If you don't specify a gateway, MultiPay uses the gateway configured in config/payment.php:
+
+$response = $paymentService->initiate($order);
+
+
+With:
+
+PAYMENT_GATEWAY=stripe
+
+
+MultiPay will automatically use Stripe.
+
+Supported Payment Gateways
+
+MultiPay currently supports:
+
+Stripe
+
+Razorpay
+
+Gateway credentials are stored in the database, making it possible to enable, disable, or switch gateways dynamically.
+
+Database Architecture
+
+MultiPay uses two primary tables:
+
+payment_gateways
+
+Stores payment gateway configuration and credentials.
+
+Typical fields include:
+
+id
+name
+code
+credentials
+is_active
+status
+timestamps
+
+payments
+
+Stores payment transactions associated with your application's payable models.
+
+The payment relationship is polymorphic:
+
+Payment
+   │
+   └── payable
+       ├── Order
+       ├── Invoice
+       ├── Subscription
+       └── Any Payable Model
+
+
+This allows a single payment system to work across multiple models without requiring separate payment implementations.
+
+Webhooks
+
+Coming Soon
+
+Webhook handling is planned for a future release.
+
+Once webhook support is available, gateway webhook events will be used to update the corresponding payment records when asynchronous events occur, such as:
+
+Payment completed
+
+Payment failed
+
+Payment refunded
+
+Until then, you should implement the appropriate webhook listeners in your application to keep the local payments table synchronized with your payment provider.
+
+Example Workflow
+
+A typical MultiPay workflow looks like this:
+
+Customer
+   │
+   ▼
+Checkout
+   │
+   ▼
+Payable Model (Order / Invoice / Subscription)
+   │
+   ▼
+PaymentService
+   │
+   ├── Resolve Gateway
+   │
+   ├── Load Database Credentials
+   │
+   ├── Calculate Payable Amount
+   │
+   ├── Create Pending Payment
+   │
+   ▼
+Stripe / Razorpay
+   │
+   ▼
+Payment Response
+
+License
+
+This package is open-sourced software. Please refer to the project's license file for licensing details.
