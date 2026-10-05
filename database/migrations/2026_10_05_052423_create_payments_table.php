@@ -13,18 +13,16 @@ return new class extends Migration
     {
         Schema::create('payments', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('order_id')->constrained()->cascadeOnDelete();
             
-            $table->string('gateway'); // 'stripe', 'razorpay'
+            // Polymorphic link to any host model (Order, Invoice, Subscription, etc.)
+            $table->morphs('payable'); // creates payable_id and payable_type
             
-            // The ID generated when initiating checkout (Stripe Session ID, Razorpay Order ID)
-            $table->string('gateway_order_id')->nullable(); 
-            
-            // The final transaction ID after successful payment (Stripe PaymentIntent ID, Razorpay Payment ID)
-            $table->string('gateway_payment_id')->nullable(); 
-            
+            $table->string('gateway');
+            $table->string('gateway_order_id')->nullable()->index();
+            $table->string('gateway_payment_id')->nullable()->index();
             $table->decimal('amount', 10, 2);
-            $table->string('status')->default('pending'); // pending, paid, failed, refunded
+            $table->string('status')->default('pending');
+            $table->json('metadata')->nullable();
             
             $table->timestamps();
         });
