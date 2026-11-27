@@ -95,7 +95,7 @@ class PaymentGatewayManager
         return $this->makeDriver($gatewayModel);
     }
 
-    protected function makeDriver(PaymentGateway $gatewayModel): PaymentGatewayInterface
+    public function makeDriver(PaymentGateway $gatewayModel): PaymentGatewayInterface
     {
         return match ($gatewayModel->code) {
             'razorpay' => new RazorpayGateway($gatewayModel),
