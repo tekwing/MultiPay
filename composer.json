@@ -1,6 +1,7 @@
 {
     "name": "tekwing/multipay",
     "description": "A reusable Stripe and Razorpay gateway manager for Laravel.",
+    "license": "MIT",
     "type": "library",
     "require": {
         "php": "^8.1",
