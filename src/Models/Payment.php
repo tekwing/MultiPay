@@ -8,6 +8,11 @@ class Payment extends Model
 {
     protected $guarded = [];
 
+    protected $casts = [
+        'amount' => 'decimal:2',
+        'metadata' => 'array',
+    ];
+
     public function payable()
     {
         return $this->morphTo();
