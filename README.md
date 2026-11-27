@@ -755,6 +755,11 @@ $partialRefund = app(PaymentService::class)->refund($payment, $payment->gateway_
 
 ---
 
+## Author
+
+**Ajith A** ([@tekwing](https://github.com/tekwing))  
+Full-Stack Developer
+
 ## License
 
-MIT
+This package is open-sourced software licensed under the [MIT license](LICENSE).
