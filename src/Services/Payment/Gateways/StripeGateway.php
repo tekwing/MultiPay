@@ -59,6 +59,23 @@ class StripeGateway implements PaymentGatewayInterface
         return (int) round($amount * 100);
     }
 
+    protected function resolveCustomerEmail(Payable $payable): ?string
+    {
+        $email = auth()->user()?->email;
+
+        if (!is_string($email) || trim($email) === '') {
+            $email = $payable->customer_email ?? null;
+        }
+
+        if (!is_string($email)) {
+            return null;
+        }
+
+        $email = trim($email);
+
+        return filter_var($email, FILTER_VALIDATE_EMAIL) ? $email : null;
+    }
+
     public function initiate(Payment $payment, Payable $payable): array
     {
         $gateway = $this->gateway();
@@ -68,7 +85,7 @@ class StripeGateway implements PaymentGatewayInterface
         $currency = strtolower(trim($payable->getPayableCurrency() ?: 'USD'));
         $description = $payable->getPayableDescription();
 
-        $session = $stripe->checkout->sessions->create([
+        $payload = [
             'mode' => 'payment',
             'line_items' => [
                 [
@@ -82,7 +99,6 @@ class StripeGateway implements PaymentGatewayInterface
                     'quantity' => 1,
                 ],
             ],
-            'customer_email' => auth()->user()?->email,
             'metadata' => [
                 'payment_id' => (string) $payment->id,
                 'payable_type' => get_class($payable),
@@ -90,7 +106,14 @@ class StripeGateway implements PaymentGatewayInterface
             ],
             'success_url' => route('payment.success') . '?session_id={CHECKOUT_SESSION_ID}',
             'cancel_url' => route('payment.cancel'),
-        ]);
+        ];
+
+        $customerEmail = $this->resolveCustomerEmail($payable);
+        if ($customerEmail !== null) {
+            $payload['customer_email'] = $customerEmail;
+        }
+
+        $session = $stripe->checkout->sessions->create($payload);
 
         $payment->update([
             'gateway_order_id' => $session->id,
