@@ -3,18 +3,16 @@
 namespace Tekwing\MultiPay\Providers;
 
 use Illuminate\Support\ServiceProvider;
-use Tekwing\MultiPay\Services\PaymentGatewayManager;
-use Tekwing\MultiPay\Services\PaymentService;
+use Tekwing\MultiPay\Services\Payment\PaymentGatewayManager;
+use Tekwing\MultiPay\Services\Payment\PaymentService;
 
 class PaymentGatewayServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        // Merge default config
         $this->mergeConfigFrom(__DIR__ . '/../../config/payment.php', 'payment');
 
-        // Bind the manager and service to the container
-        $this->app->singleton(PaymentGatewayManager::class, function ($app) {
+        $this->app->singleton(PaymentGatewayManager::class, function () {
             return new PaymentGatewayManager();
         });
 
@@ -25,20 +23,15 @@ class PaymentGatewayServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        // Load package routes and migrations automatically
         $this->loadRoutesFrom(__DIR__ . '/../../routes/web.php');
         $this->loadMigrationsFrom(__DIR__ . '/../../database/migrations');
+        $this->loadViewsFrom(__DIR__ . '/../../resources/views', 'multipay');
 
-        // Load your pre-built views
-        $this->loadViewsFrom(__DIR__.'/../resources/views', 'multipay');
-
-        // Allow developers to publish and customize the view later
-        $this->publishes([
-            __DIR__.'/../resources/views' => resource_path('views/vendor/multipay'),
-        ], 'payment-views');
-
-        // Allow developers to publish config and migrations to their own app
         if ($this->app->runningInConsole()) {
+            $this->publishes([
+                __DIR__ . '/../../resources/views' => resource_path('views/vendor/multipay'),
+            ], 'payment-views');
+
             $this->publishes([
                 __DIR__ . '/../../config/payment.php' => config_path('payment.php'),
             ], 'payment-config');

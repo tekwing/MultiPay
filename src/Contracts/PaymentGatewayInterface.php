@@ -2,6 +2,8 @@
 
 namespace Tekwing\MultiPay\Contracts;
 
+use Tekwing\MultiPay\Models\Payment;
+
 interface PaymentGatewayInterface
 {
     public function initiate(
@@ -13,7 +15,8 @@ interface PaymentGatewayInterface
 
     public function refund(
         string $paymentId,
-        ?float $amount = null
+        ?float $amount = null,
+        string $currency = 'INR'
     ): array;
 
     public function handleWebhook(

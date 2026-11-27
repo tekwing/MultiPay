@@ -4,7 +4,6 @@ namespace Tekwing\MultiPay\Services\Payment;
 
 use Tekwing\MultiPay\Contracts\Payable;
 use Tekwing\MultiPay\Models\Payment;
-use Tekwing\MultiPay\Services\Payment\PaymentGatewayManager;
 
 class PaymentService
 {
@@ -12,34 +11,36 @@ class PaymentService
         protected PaymentGatewayManager $manager
     ) {}
 
-    public function initiate(Payable $payable): array
+    /**
+     * Initiate a payment using the chosen gateway code (or active/default gateway).
+     */
+    public function initiate(Payable $payable, ?string $gatewayCode = null): array
     {
-        // Get currently active gateway
-        $gateway = $this->manager->getActiveGateway();
+        $gateway = $this->manager->resolveEnabledGateway($gatewayCode);
+        $currency = strtoupper(trim($payable->getPayableCurrency() ?: 'INR'));
 
-        // Create ONE local payment attempt
         $payment = $payable->payments()->create([
             'gateway' => $gateway->code,
             'amount' => $payable->getPayableAmount(),
             'status' => 'pending',
+            'metadata' => [
+                'currency' => $currency,
+            ],
         ]);
 
-        // Let the selected gateway process it
         $response = $this->manager
-            ->driverByCode($gateway->code)
+            ->makeDriver($gateway)
             ->initiate($payment, $payable);
 
-        // Add package payment ID
         $response['local_payment_id'] = $payment->id;
         $response['gateway'] = $gateway->code;
+        $response['currency'] = $currency;
 
         return $response;
     }
 
-    public function verify(
-        Payment $payment,
-        array $data
-    ): bool {
+    public function verify(Payment $payment, array $data): bool
+    {
         return $this->manager
             ->driverForPayment($payment)
             ->verify($data);
@@ -50,9 +51,16 @@ class PaymentService
         string $paymentId,
         ?float $amount = null
     ): array {
+        $currency = strtoupper(
+            (string) ($payment->metadata['currency']
+                ?? (method_exists($payment->payable, 'getPayableCurrency')
+                    ? $payment->payable->getPayableCurrency()
+                    : 'INR'))
+        );
+
         return $this->manager
             ->driverForPayment($payment)
-            ->refund($paymentId, $amount);
+            ->refund($paymentId, $amount, $currency);
     }
 
     public function handleWebhook(
@@ -68,7 +76,7 @@ class PaymentService
     public function activeGateway(): string
     {
         return $this->manager
-            ->getActiveGateway()
+            ->resolveEnabledGateway()
             ->code;
     }
 }

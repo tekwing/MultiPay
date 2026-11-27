@@ -1,29 +1,45 @@
 <?php
 
-namespace Tekwing\MultiPay\Services\Gateways;
+namespace Tekwing\MultiPay\Services\Payment\Gateways;
 
-use Tekwing\MultiPay\Contracts\PaymentGatewayInterface;
-use Tekwing\MultiPay\Contracts\Payable;
-use Tekwing\MultiPay\Models\PaymentGateway;
-use Tekwing\MultiPay\Models\Payment;
-use Tekwing\MultiPay\Events\PaymentSucceeded;
-use Tekwing\MultiPay\Events\PaymentFailed;
-use Razorpay\Api\Api;
 use Exception;
+use Illuminate\Support\Facades\DB;
+use Razorpay\Api\Api;
+use Tekwing\MultiPay\Contracts\Payable;
+use Tekwing\MultiPay\Contracts\PaymentGatewayInterface;
+use Tekwing\MultiPay\Events\PaymentFailed;
+use Tekwing\MultiPay\Events\PaymentSucceeded;
+use Tekwing\MultiPay\Models\Payment;
+use Tekwing\MultiPay\Models\PaymentGateway;
 
 class RazorpayGateway implements PaymentGatewayInterface
 {
+    public function __construct(
+        protected ?PaymentGateway $gatewayModel = null
+    ) {}
+
     protected function gateway(): PaymentGateway
     {
-        return PaymentGateway::where('code', 'razorpay')
+        if ($this->gatewayModel) {
+            return $this->gatewayModel;
+        }
+
+        $this->gatewayModel = PaymentGateway::query()
+            ->where('code', 'razorpay')
             ->where('status', true)
             ->firstOrFail();
+
+        return $this->gatewayModel;
     }
 
-    protected function api(): Api
+    protected function api(?PaymentGateway $gateway = null): Api
     {
-        $gateway = $this->gateway();
-        $credentials = $gateway->credentials;
+        $gateway = $gateway ?? $this->gateway();
+        $credentials = $gateway->credentials ?? [];
+
+        if (empty($credentials['key_id']) || empty($credentials['key_secret'])) {
+            throw new Exception('Razorpay API credentials are not configured.');
+        }
 
         return new Api(
             $credentials['key_id'],
@@ -31,39 +47,50 @@ class RazorpayGateway implements PaymentGatewayInterface
         );
     }
 
-    public function initiate(
-        Payment $payment,
-        Payable $payable
-    ): array {
-        $api = $this->api();
+    protected function toMinorUnits(float $amount, string $currency): int
+    {
+        $zeroDecimal = ['JPY', 'KRW'];
+
+        if (in_array(strtoupper($currency), $zeroDecimal, true)) {
+            return (int) round($amount);
+        }
+
+        return (int) round($amount * 100);
+    }
+
+    public function initiate(Payment $payment, Payable $payable): array
+    {
+        $gateway = $this->gateway();
+        $api = $this->api($gateway);
 
         $amount = $payable->getPayableAmount();
+        $currency = strtoupper(trim($payable->getPayableCurrency() ?: 'INR'));
         $description = $payable->getPayableDescription();
+        $minorAmount = $this->toMinorUnits($amount, $currency);
 
         $razorpayOrder = $api->order->create([
-            'receipt' => substr($description, 0, 40),
-            'amount' => (int) round($amount * 100),
-            'currency' => 'INR',
+            'receipt' => substr((string) ($payment->id . '-' . $description), 0, 40),
+            'amount' => $minorAmount,
+            'currency' => $currency,
         ]);
 
-        // Update the EXISTING payment
         $payment->update([
             'gateway_order_id' => $razorpayOrder['id'],
         ]);
 
-        $gateway = $this->gateway();
+        $user = auth()->user();
 
         return [
             'gateway' => 'razorpay',
             'key' => $gateway->credentials['key_id'],
             'order_id' => $razorpayOrder['id'],
-            'amount' => (int) round($amount * 100),
-            'currency' => 'INR',
+            'amount' => $minorAmount,
+            'currency' => $currency,
             'name' => config('app.name'),
             'description' => $description,
             'prefill' => [
-                'name' => auth()->user()->name ?? '',
-                'email' => auth()->user()->email ?? '',
+                'name' => $user?->name ?? '',
+                'email' => $user?->email ?? '',
             ],
         ];
     }
@@ -73,38 +100,57 @@ class RazorpayGateway implements PaymentGatewayInterface
         try {
             $api = $this->api();
 
-            // 1. Verify the signature with Razorpay
             $api->utility->verifyPaymentSignature([
-                'razorpay_order_id'   => $data['razorpay_order_id'],
+                'razorpay_order_id' => $data['razorpay_order_id'],
                 'razorpay_payment_id' => $data['razorpay_payment_id'],
-                'razorpay_signature'  => $data['razorpay_signature'],
+                'razorpay_signature' => $data['razorpay_signature'],
             ]);
 
-            // 2. Look up the specific PAYMENT attempt
-            $payment = Payment::where('gateway_order_id', $data['razorpay_order_id'])->first();
+            $shouldDispatchSuccess = false;
+            $lockedPayment = null;
 
-            if ($payment && $payment->status !== 'paid') {
-                
-                // 3. Update the package's Payment record
-                $payment->update([
-                    'status'             => 'paid',
-                    'gateway_payment_id' => $data['razorpay_payment_id'],
-                ]);
+            DB::transaction(function () use ($data, &$shouldDispatchSuccess, &$lockedPayment) {
+                $payment = Payment::query()
+                    ->where('gateway_order_id', $data['razorpay_order_id'])
+                    ->lockForUpdate()
+                    ->first();
 
-                // 4. Fire the Success Event for the Host App!
-                event(new PaymentSucceeded($payment));
+                if ($payment && $payment->status !== 'paid') {
+                    $payment->update([
+                        'status' => 'paid',
+                        'gateway_payment_id' => $data['razorpay_payment_id'],
+                    ]);
+
+                    $shouldDispatchSuccess = true;
+                    $lockedPayment = $payment->fresh();
+                }
+            });
+
+            if ($shouldDispatchSuccess && $lockedPayment) {
+                event(new PaymentSucceeded($lockedPayment));
             }
 
             return true;
-
         } catch (Exception $e) {
-            
-            // If we know which payment failed, we could optionally mark it and fire PaymentFailed
-            if (isset($data['razorpay_order_id'])) {
-                $payment = Payment::where('gateway_order_id', $data['razorpay_order_id'])->first();
-                if ($payment && $payment->status !== 'paid') {
-                    $payment->update(['status' => 'failed']);
-                    event(new PaymentFailed($payment));
+            if (!empty($data['razorpay_order_id'])) {
+                $shouldDispatchFailed = false;
+                $lockedPayment = null;
+
+                DB::transaction(function () use ($data, &$shouldDispatchFailed, &$lockedPayment) {
+                    $payment = Payment::query()
+                        ->where('gateway_order_id', $data['razorpay_order_id'])
+                        ->lockForUpdate()
+                        ->first();
+
+                    if ($payment && $payment->status !== 'paid') {
+                        $payment->update(['status' => 'failed']);
+                        $shouldDispatchFailed = true;
+                        $lockedPayment = $payment->fresh();
+                    }
+                });
+
+                if ($shouldDispatchFailed && $lockedPayment) {
+                    event(new PaymentFailed($lockedPayment));
                 }
             }
 
@@ -115,14 +161,14 @@ class RazorpayGateway implements PaymentGatewayInterface
 
     public function refund(
         string $paymentId,
-        ?float $amount = null
+        ?float $amount = null,
+        string $currency = 'INR'
     ): array {
-
         $api = $this->api();
         $data = [];
 
         if ($amount !== null) {
-            $data['amount'] = (int) round($amount * 100);
+            $data['amount'] = $this->toMinorUnits($amount, $currency);
         }
 
         $refund = $api
@@ -132,14 +178,69 @@ class RazorpayGateway implements PaymentGatewayInterface
         return $refund->toArray();
     }
 
-    public function handleWebhook(
-        string $payload,
-        array $headers = []
-    ): bool {
-        // When you implement Razorpay webhooks (e.g. order.paid event),
-        // make sure you use Payment::where('gateway_order_id', ...) 
-        // to update the status and fire event(new PaymentSucceeded($payment));
-        // exactly like Stripe's webhook handler!
+    public function handleWebhook(string $payload, array $headers = []): bool
+    {
+        $gateway = $this->gateway();
+        $webhookSecret = $gateway->credentials['webhook_secret'] ?? null;
+
+        if (!$webhookSecret) {
+            return false;
+        }
+
+        $signature = $headers['X-Razorpay-Signature']
+            ?? $headers['x-razorpay-signature']
+            ?? null;
+
+        if (!$signature) {
+            return false;
+        }
+
+        $expectedSignature = hash_hmac('sha256', $payload, $webhookSecret);
+
+        if (!hash_equals($expectedSignature, $signature)) {
+            return false;
+        }
+
+        $event = json_decode($payload, true);
+        if (!is_array($event)) {
+            return false;
+        }
+
+        $eventName = $event['event'] ?? '';
+        $orderId = $event['payload']['payment']['entity']['order_id']
+            ?? $event['payload']['order']['entity']['id']
+            ?? null;
+        $gatewayPaymentId = $event['payload']['payment']['entity']['id'] ?? null;
+
+        if (!$orderId) {
+            return true;
+        }
+
+        if (in_array($eventName, ['order.paid', 'payment.captured'], true)) {
+            $shouldDispatchSuccess = false;
+            $lockedPayment = null;
+
+            DB::transaction(function () use ($orderId, $gatewayPaymentId, &$shouldDispatchSuccess, &$lockedPayment) {
+                $payment = Payment::query()
+                    ->where('gateway_order_id', $orderId)
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($payment && $payment->status !== 'paid') {
+                    $payment->update([
+                        'status' => 'paid',
+                        'gateway_payment_id' => $gatewayPaymentId ?? $payment->gateway_payment_id,
+                    ]);
+
+                    $shouldDispatchSuccess = true;
+                    $lockedPayment = $payment->fresh();
+                }
+            });
+
+            if ($shouldDispatchSuccess && $lockedPayment) {
+                event(new PaymentSucceeded($lockedPayment));
+            }
+        }
 
         return true;
     }
