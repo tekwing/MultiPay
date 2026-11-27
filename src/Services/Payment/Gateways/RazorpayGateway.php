@@ -31,26 +31,24 @@ class RazorpayGateway implements PaymentGatewayInterface
         );
     }
 
-    public function initiate(Payable $payable): array
-    {
+    public function initiate(
+        Payment $payment,
+        Payable $payable
+    ): array {
         $api = $this->api();
-        
+
         $amount = $payable->getPayableAmount();
         $description = $payable->getPayableDescription();
 
         $razorpayOrder = $api->order->create([
-            // Razorpay limits 'receipt' to 40 characters max
             'receipt' => substr($description, 0, 40),
             'amount' => (int) round($amount * 100),
             'currency' => 'INR',
         ]);
 
-        // INSERT SEPARATE PAYMENT RECORD (Polymorphic)
-        $payable->payments()->create([
-            'gateway' => 'razorpay',
+        // Update the EXISTING payment
+        $payment->update([
             'gateway_order_id' => $razorpayOrder['id'],
-            'amount' => $amount,
-            'status' => 'pending',
         ]);
 
         $gateway = $this->gateway();

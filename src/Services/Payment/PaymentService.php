@@ -1,9 +1,10 @@
 <?php
 
-namespace Tekwing\MultiPay\Services;
+namespace Tekwing\MultiPay\Services\Payment;
 
 use Tekwing\MultiPay\Contracts\Payable;
 use Tekwing\MultiPay\Models\Payment;
+use Tekwing\MultiPay\Services\Payment\PaymentGatewayManager;
 
 class PaymentService
 {
@@ -13,18 +14,37 @@ class PaymentService
 
     public function initiate(Payable $payable): array
     {
-        return $this->manager->driver()->initiate($payable);
+        // Get currently active gateway
+        $gateway = $this->manager->getActiveGateway();
+
+        // Create ONE local payment attempt
+        $payment = $payable->payments()->create([
+            'gateway' => $gateway->code,
+            'amount' => $payable->getPayableAmount(),
+            'status' => 'pending',
+        ]);
+
+        // Let the selected gateway process it
+        $response = $this->manager
+            ->driverByCode($gateway->code)
+            ->initiate($payment, $payable);
+
+        // Add package payment ID
+        $response['local_payment_id'] = $payment->id;
+        $response['gateway'] = $gateway->code;
+
+        return $response;
     }
 
-    // Pass the specific Payment record instead of the Order
-    public function verify(Payment $payment, array $data): bool
-    {
-        return $this->manager->driverForPayment($payment)->verify($data);
+    public function verify(
+        Payment $payment,
+        array $data
+    ): bool {
+        return $this->manager
+            ->driverForPayment($payment)
+            ->verify($data);
     }
 
-    /**
-     * Refund using the gateway associated with the specific payment attempt.
-     */
     public function refund(
         Payment $payment,
         string $paymentId,
@@ -35,9 +55,6 @@ class PaymentService
             ->refund($paymentId, $amount);
     }
 
-    /**
-     * Handle gateway-specific webhook.
-     */
     public function handleWebhook(
         string $gatewayCode,
         string $payload,

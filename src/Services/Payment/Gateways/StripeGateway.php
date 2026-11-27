@@ -38,14 +38,18 @@ class StripeGateway implements PaymentGatewayInterface
     /**
      * Create Stripe Checkout Session.
      */
-    public function initiate(Payable $payable): array
-    {
+    public function initiate(
+        Payment $payment,
+        Payable $payable
+    ): array {
         $stripe = $this->stripe();
+
         $amount = $payable->getPayableAmount();
         $description = $payable->getPayableDescription();
 
         $session = $stripe->checkout->sessions->create([
             'mode' => 'payment',
+
             'line_items' => [
                 [
                     'price_data' => [
@@ -58,21 +62,24 @@ class StripeGateway implements PaymentGatewayInterface
                     'quantity' => 1,
                 ],
             ],
+
             'customer_email' => auth()->user()->email ?? null,
+
             'metadata' => [
+                'payment_id' => (string) $payment->id,
                 'payable_type' => get_class($payable),
                 'payable_id' => (string) $payable->getKey(),
             ],
-            'success_url' => route('payment.success') . '?session_id={CHECKOUT_SESSION_ID}',
+
+            'success_url' => route('payment.success')
+                . '?session_id={CHECKOUT_SESSION_ID}',
+
             'cancel_url' => route('payment.cancel'),
         ]);
 
-        // INSERT SEPARATE PAYMENT RECORD (Polymorphic)
-        $payable->payments()->create([
-            'gateway' => 'stripe',
+        // Update existing payment
+        $payment->update([
             'gateway_order_id' => $session->id,
-            'amount' => $amount,
-            'status' => 'pending',
         ]);
 
         return [
